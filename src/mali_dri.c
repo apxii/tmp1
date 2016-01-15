@@ -81,6 +81,8 @@ static Bool create_buffer(DrawablePtr pDraw, DRI2Buffer2Ptr buffer)
 		privWindowPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(pWindowPixmap);
 	}
 
+	DRI2_BUFFER_SET_FB(buffer->flags, 0);
+
 	if (DRI2CanFlip(pDraw) && fPtr->use_pageflipping && DRAWABLE_WINDOW == pDraw->type)
 	{
 		assert(privWindowPixmap->buf_info);
@@ -97,6 +99,7 @@ static Bool create_buffer(DrawablePtr pDraw, DRI2Buffer2Ptr buffer)
 		}
 
 		privates->isPageFlipped = TRUE;
+		DRI2_BUFFER_SET_FB(buffer->flags, 1);
 	}
 
 	/* Either the surface isn't swappable or the framebuffer back buffer is already in use */
@@ -180,13 +183,14 @@ static Bool create_buffer(DrawablePtr pDraw, DRI2Buffer2Ptr buffer)
 
 	if (privPixmapToWrap->isFrameBuffer)
 	{
-		assert((privPixmapToWrap->mem_info->offset & 3) == 0);
-		buffer->flags = privPixmapToWrap->mem_info->offset;
+		assert((privPixmapToWrap->mem_info->offset & DRI2_BUFFER_FLAG_MASK) == 0);
+		DRI2_BUFFER_SET_REUSED(buffer->flags, 1);
+		buffer->flags |= privPixmapToWrap->mem_info->offset;
 	}
 	else if (buffer->attachment == DRI2BufferBackLeft)
 	{
 		assert(privPixmapToWrap->mem_info->offset == 0);
-		buffer->flags = 1;
+		DRI2_BUFFER_SET_REUSED(buffer->flags, 0);
 	}
 
 	pPixmapToWrap->refcnt++;
@@ -463,8 +467,6 @@ static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferP
 	PrivPixmap *front_pixmap_priv = (PrivPixmap *)exaGetPixmapDriverPrivate(front_pixmap);
 	PrivPixmap *back_pixmap_priv  = (PrivPixmap *)exaGetPixmapDriverPrivate(back_pixmap);
 
-	back->flags &= ~3;
-
 	new_canflip = DRI2CanFlip(pDraw);
 #if DRI2INFOREC_VERSION < 6
 
@@ -526,24 +528,13 @@ static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferP
 	}
 	else if (MaliDRI2CanExchange(pDraw, front, back))
 	{
-		if (back_pixmap_priv->buf_info->num_pixmaps == fPtr->dri2_num_buffers)
+		if (back_pixmap_priv->buf_info != front_pixmap_priv->buf_info && back_pixmap_priv->buf_info->num_pixmaps == fPtr->dri2_num_buffers)
 		{
 			back_pixmap_priv->buf_info->num_pixmaps = fPtr->dri2_num_buffers - 1;
 		}
 
 		dri2_complete_cmd = DRI2_EXCHANGE_COMPLETE;
 		exchange_buffers(pDraw, front, back, dri2_complete_cmd);
-
-		DEBUG_STR(1, "Swapping! front_pixmap->drawable.width %d, front_pixmap->drawable.height %d, pDraw->width %d, pDraw->height %d", front_pixmap->drawable.width, front_pixmap->drawable.height, pDraw->width, pDraw->height);
-		box.x1 = 0;
-		box.y1 = 0;
-		box.x2 = pDraw->width;
-		box.y2 = pDraw->height;
-		REGION_INIT(pScreen, &region, &box, 0);
-
-		RegionTranslate(&region, front_pixmap->screen_x, front_pixmap->screen_y);
-
-		DamageDamageRegion(pDraw, &region);
 	}
 	else
 	{
@@ -556,6 +547,8 @@ static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferP
 		/* Create new pixmaps if we are doing copy, so that there are total fPtr->dri2_num_buffers back pixmaps */
 		if (back_pixmap_priv->buf_info->num_pixmaps < fPtr->dri2_num_buffers)
 		{
+			int old_num_pixmaps = back_pixmap_priv->buf_info->num_pixmaps;
+
 			if (back_pixmap_priv->buf_info->pPixmaps[fPtr->dri2_num_buffers - 1])
 			{
 				back_pixmap_priv->buf_info->num_pixmaps = fPtr->dri2_num_buffers;
@@ -580,6 +573,11 @@ static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferP
 				}
 
 				back_pixmap_priv->buf_info->num_pixmaps = i;
+			}
+
+			if (old_num_pixmaps == 1 && back_pixmap_priv->buf_info->num_pixmaps > 1)
+			{
+				back_pixmap_priv->buf_info->current_pixmap = (back_pixmap_priv->buf_info->current_pixmap + 1) % back_pixmap_priv->buf_info->num_pixmaps;
 			}
 		}
 
@@ -614,6 +612,8 @@ void MaliDRI2ReuseBufferNotify(DrawablePtr pDraw, DRI2BufferPtr buffer)
 	PrivPixmap *privWindowPixmap = NULL;
 	PixmapPtr pPixmapToWrap = NULL;
 	PrivPixmap *privPixmapToWrap;
+
+	DRI2_BUFFER_SET_REUSED(buffer->flags, 1);
 
 	if (DRI2BufferBackLeft != buffer->attachment)
 	{
