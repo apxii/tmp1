@@ -1008,7 +1008,7 @@ static Bool mali_drm_open_master(ScrnInfoPtr pScrn)
 
 	if (global_drm_fd == -1)
 	{
-		global_drm_fd = drmOpen("mali_drm", NULL);
+		global_drm_fd = drmOpen("exynos", NULL);
 
 		if (global_drm_fd == -1)
 		{
