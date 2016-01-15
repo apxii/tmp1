@@ -181,12 +181,12 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 		if (!offset)
 		{
 			(void)ioctl(fPtr->fb_lcd_fd, GET_UMP_SECURE_ID_BUF1, &ump_id);
-			ERROR_MSG("GET_UMP_SECURE_ID_BUF1 returned 0x%x offset: %i virt address: %p fb_virt: %p\n", ump_id, offset, pPixData, fPtr->fbmem);
+			INFO_MSG("GET_UMP_SECURE_ID_BUF1 returned 0x%x offset: %i virt address: %p fb_virt: %p", ump_id, offset, pPixData, fPtr->fbmem);
 		}
 		else
 		{
 			(void)ioctl(fPtr->fb_lcd_fd, GET_UMP_SECURE_ID_BUF2, &ump_id);
-			ERROR_MSG("GET_UMP_SECURE_ID_BUF2 returned 0x%x offset: %i virt address: %p fb_virt: %p\n", ump_id, offset, pPixData, fPtr->fbmem);
+			INFO_MSG("GET_UMP_SECURE_ID_BUF2 returned 0x%x offset: %i virt address: %p fb_virt: %p", ump_id, offset, pPixData, fPtr->fbmem);
 		}
 
 		if (UMP_INVALID_SECURE_ID == ump_id)
@@ -245,7 +245,7 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 			offset = 0;
 		}
 
-		INFO_MSG("Creating FRAMEBUFFER pixmap %p at offset %lu, privPixmap=%p\n", pPixmap, privPixmap->mem_info->offset, privPixmap);
+		INFO_MSG("Creating FRAMEBUFFER pixmap %p at offset %lu, privPixmap=%p", pPixmap, privPixmap->mem_info->offset, privPixmap);
 
 		return TRUE;
 	}

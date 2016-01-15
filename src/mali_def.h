@@ -58,7 +58,7 @@
 		             ##__VA_ARGS__); } while (0)
 #define DEBUG_STR(nr, fmt, ...) \
 	do { if (nr <= MALI_DEBUG_LEVEL) \
-			xf86Msg(X_WARNING, "Debug: " fmt "\n",\
+			xf86Msg(X_INFO, "Debug: " fmt "\n",\
 			        ##__VA_ARGS__); } while (0)
 #else
 #define TRACE_ENTER()

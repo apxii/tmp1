@@ -187,7 +187,7 @@ static void fbdev_lcd_output_mode_set(xf86OutputPtr output, DisplayModePtr mode,
 
 	if (ioctl(fPtr->fb_lcd_fd, FBIOGET_VSCREENINFO, &fPtr->fb_lcd_var) < 0)
 	{
-		INFO_MSG("Unable to get VSCREENINFO");
+		ERROR_MSG("Unable to get VSCREENINFO");
 	}
 
 	fPtr->fb_lcd_var.xres = mode->HDisplay;
@@ -198,7 +198,7 @@ static void fbdev_lcd_output_mode_set(xf86OutputPtr output, DisplayModePtr mode,
 
 	if (ioctl(fPtr->fb_lcd_fd, FBIOPUT_VSCREENINFO, &fPtr->fb_lcd_var) < 0)
 	{
-		INFO_MSG("Unable to set mode!");
+		ERROR_MSG("Unable to set mode!");
 	}
 
 }

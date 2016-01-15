@@ -72,8 +72,7 @@ static DRI2Buffer2Ptr MaliDRI2CreateBuffer(DrawablePtr pDraw, unsigned int attac
 		privWindowPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(pWindowPixmap);
 	}
 
-	// xf86DrvMsg( pScrn->scrnIndex, X_INFO, "Creating attachment %u around drawable %p (window pixmap %p)\n", attachment, pDraw, pScreen->GetWindowPixmap((WindowPtr)pDraw));
-	DEBUG_STR(1, "Creating attachment %u around drawable %p (window pixmap %p)\n", attachment, pDraw, pScreen->GetWindowPixmap((WindowPtr)pDraw));
+	DEBUG_STR(1, "Creating attachment %u around drawable %p (window pixmap %p)", attachment, pDraw, pScreen->GetWindowPixmap((WindowPtr)pDraw));
 
 	buffer = calloc(1, sizeof * buffer);
 
@@ -141,7 +140,7 @@ static DRI2Buffer2Ptr MaliDRI2CreateBuffer(DrawablePtr pDraw, unsigned int attac
 
 			if (NULL == pPixmapToWrap)
 			{
-				xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "[%s:%d] unable to allocate pixmap\n", __FUNCTION__, __LINE__);
+				ERROR_MSG("[%s:%d] unable to allocate pixmap\n", __FUNCTION__, __LINE__);
 				free(buffer);
 				free(privates);
 				return NULL;
@@ -165,7 +164,6 @@ static DRI2Buffer2Ptr MaliDRI2CreateBuffer(DrawablePtr pDraw, unsigned int attac
 
 	if (0 == buffer->pitch)
 	{
-		//xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] Warning: Autocalculating pitch\n", __FUNCTION__, __LINE__ );
 		WARNING_MSG("Autocalculating pitch");
 		buffer->pitch = ((pPixmapToWrap->drawable.width * pPixmapToWrap->drawable.bitsPerPixel) + 7) / 8;
 	}
@@ -180,8 +178,7 @@ static void MaliDRI2DestroyBuffer(DrawablePtr pDraw, DRI2Buffer2Ptr buffer)
 	ScreenPtr pScreen = pDraw->pScreen;
 	ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
 
-	//xf86DrvMsg( pScrn->scrnIndex, X_INFO, "Destroying attachment %d for drawable %p\n", buffer->attachment, pDraw);
-	DEBUG_STR(1, "Destroying attachment %d for drawable %p\n", buffer->attachment, pDraw);
+	DEBUG_STR(1, "Destroying attachment %d for drawable %p", buffer->attachment, pDraw);
 
 	if (NULL != buffer)
 	{
@@ -299,18 +296,22 @@ static int exchange_buffers(DrawablePtr pDraw, DRI2BufferPtr front, DRI2BufferPt
 	{
 		if (front_privPixmap->mem_info->usize == back_privPixmap->mem_info->usize)
 		{
-			DEBUG_STR(1, "EXCHANGING UMP ID 0x%x with 0x%x (%s)\n", ump_secure_id_get(front_privPixmap->mem_info->handle), ump_secure_id_get(back_privPixmap->mem_info->handle), dri2_complete_cmd == DRI2_EXCHANGE_COMPLETE ? "SWAP" : "FLIP");
+			DEBUG_STR(1, "EXCHANGING UMP ID 0x%x with 0x%x (%s)", ump_secure_id_get(front_privPixmap->mem_info->handle), ump_secure_id_get(back_privPixmap->mem_info->handle), dri2_complete_cmd == DRI2_EXCHANGE_COMPLETE ? "SWAP" : "FLIP");
 			exchange(front_privPixmap->mem_info, back_privPixmap->mem_info);
 		}
 		else
 		{
-			DEBUG_STR(1, "EXCHANGING FAILED FOR UMP ID 0x%x size: %ld with 0x%x size (%ld)\n", ump_secure_id_get(front_privPixmap->mem_info->handle), front_privPixmap->mem_info->usize, ump_secure_id_get(back_privPixmap->mem_info->handle), back_privPixmap->mem_info->usize);
+			DEBUG_STR(1, "EXCHANGING FAILED FOR UMP ID 0x%x size: %ld with 0x%x size (%ld)", ump_secure_id_get(front_privPixmap->mem_info->handle), front_privPixmap->mem_info->usize, ump_secure_id_get(back_privPixmap->mem_info->handle), back_privPixmap->mem_info->usize);
 			return 0;
 		}
 	}
 	else if (both_framebuffer)
 	{
 		exchange(front->driverPrivate, back->driverPrivate);
+	}
+	else
+	{
+		return 0;
 	}
 
 	return 1;
@@ -323,13 +324,11 @@ static void platform_wait_for_vsync(ScrnInfoPtr pScrn, int fb_lcd_fd)
 
 	if (ioctl(fb_lcd_fd, S3CFB_SET_VSYNC_INT, &interrupt) < 0)
 	{
-		//xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] failed in S3CFB_SET_VSYNC_INT\n", __FUNCTION__, __LINE__ );
 		WARNING_MSG("failed in S3CFB_SET_VSYNC_INT");
 	}
 
 	if (ioctl(fb_lcd_fd, FBIO_WAITFORVSYNC, 0) < 0)
 	{
-		//xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] failed in FBIO_WAITFORVSYNC\n", __FUNCTION__, __LINE__ );
 		WARNING_MSG("failed in FBIO_WAITFORVSYNC");
 	}
 
@@ -337,7 +336,6 @@ static void platform_wait_for_vsync(ScrnInfoPtr pScrn, int fb_lcd_fd)
 
 	if (ioctl(fb_lcd_fd, S3CFB_SET_VSYNC_INT, &interrupt) < 0)
 	{
-		//xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] failed in S3CFB_SET_VSYNC_INT\n", __FUNCTION__, __LINE__ );
 		WARNING_MSG("failed in S3CFB_SET_VSYNC_INT");
 	}
 
@@ -409,11 +407,10 @@ static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferP
 
 		unsigned int line_length = fPtr->fb_lcd_var.xres * fPtr->fb_lcd_var.bits_per_pixel / 8;
 		fPtr->fb_lcd_var.yoffset = back_pixmap_priv->mem_info->offset / line_length;
-		DEBUG_STR(1, "Flipping! ofs %d\n", fPtr->fb_lcd_var.yoffset);
+		DEBUG_STR(1, "Flipping! ofs %d", fPtr->fb_lcd_var.yoffset);
 
 		if (ioctl(fPtr->fb_lcd_fd, FBIOPAN_DISPLAY, &fPtr->fb_lcd_var) == -1)
 		{
-			//xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] failed in FBIOPAN_DISPLAY\n", __FUNCTION__, __LINE__ );
 			WARNING_MSG("failed in FBIOPAN_DISPLAY");
 		}
 
@@ -451,7 +448,7 @@ static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferP
 
 		if (exchange_buffers(pDraw, front, back, dri2_complete_cmd))
 		{
-			DEBUG_STR(1, "Swapping! front_pixmap->drawable.width %d, front_pixmap->drawable.height %d, pDraw->width %d, pDraw->height %d\n", front_pixmap->drawable.width, front_pixmap->drawable.height, pDraw->width, pDraw->height);
+			DEBUG_STR(1, "Swapping! front_pixmap->drawable.width %d, front_pixmap->drawable.height %d, pDraw->width %d, pDraw->height %d", front_pixmap->drawable.width, front_pixmap->drawable.height, pDraw->width, pDraw->height);
 			box.x1 = 0;
 			box.y1 = 0;
 			box.x2 = pDraw->width;
@@ -518,14 +515,11 @@ Bool MaliDRI2ScreenInit(ScreenPtr pScreen)
 
 	if (dri2_minor < 1)
 	{
-		//xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "%s requires DRI2 module version 1.1.0 or later\n", __func__);
 		ERROR_MSG("%s requires DRI2 module version 1.1.0 or later\n", __func__);
 		return FALSE;
 	}
 
-	xf86DrvMsg(pScrn->scrnIndex, X_INFO, "DRI2 version: %i.%i\n", dri2_major, dri2_minor);
-	INFO_MSG("DRI2 version: %i.%i\n", dri2_major, dri2_minor);
-
+	INFO_MSG("DRI2 version: %i.%i", dri2_major, dri2_minor);
 
 	/* extract deviceName */
 	info.fd = fPtr->drm_fd;
@@ -536,7 +530,7 @@ Bool MaliDRI2ScreenInit(ScreenPtr pScreen)
 
 	for (i = 0; i < DRM_MAX_MINOR; i++)
 	{
-		sprintf(p, DRM_DEV_NAME, DRM_DIR_NAME, i);
+		snprintf(p, 64, DRM_DEV_NAME, DRM_DIR_NAME, i);
 
 		if (stat(p, &sbuf) == 0 && sbuf.st_rdev == d)
 		{
@@ -546,7 +540,6 @@ Bool MaliDRI2ScreenInit(ScreenPtr pScreen)
 
 	if (i == DRM_MAX_MINOR)
 	{
-		//xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "%s failed to open drm device\n", __func__ );
 		ERROR_MSG("%s failed to open drm device\n", __func__);
 		return FALSE;
 	}

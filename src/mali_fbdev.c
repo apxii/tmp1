@@ -152,8 +152,6 @@ pointer MaliSetup(pointer module, pointer opts, int *errmaj, int *errmin)
 {
 	static Bool setupDone = FALSE;
 
-	ERROR_STR("MaliSetup");
-
 	IGNORE(opts);
 	IGNORE(errmin);
 
@@ -240,8 +238,6 @@ void MaliHWFreeRec(ScrnInfoPtr pScrn)
 
 static const OptionInfoRec *MaliAvailableOptions(int chipid, int busid)
 {
-	ERROR_STR("MaliAvailableOptions");
-
 	IGNORE(chipid);
 	IGNORE(busid);
 
@@ -250,8 +246,6 @@ static const OptionInfoRec *MaliAvailableOptions(int chipid, int busid)
 
 static void MaliIdentify(int flags)
 {
-	ERROR_STR("MaliIdentify");
-
 	IGNORE(flags);
 
 	xf86PrintChipsets(MALI_NAME, "driver for Mali Framebuffer", MaliChipsets);
@@ -263,7 +257,7 @@ static Bool fbdev_crtc_config_resize(ScrnInfoPtr pScrn, int width, int height)
 	xf86CrtcConfigPtr xf86_config = XF86_CRTC_CONFIG_PTR(pScrn);
 	int pitch, i;
 
-	INFO_MSG("%s: width = %d height = %d\n", __FUNCTION__, width, height);
+	INFO_MSG("%s: width = %d height = %d", __FUNCTION__, width, height);
 
 	/* we currently need EXA for this to work */
 	if (fPtr->exa == NULL)
@@ -590,8 +584,6 @@ Bool MaliHWProbe(char *device, char **namep)
 {
 	int fd;
 
-	ERROR_STR("MaliHWProbe");
-
 	if ((fd = mali_open(-1, device, namep)) == -1)
 	{
 		return FALSE;
@@ -781,8 +773,6 @@ static Bool MaliProbe(DriverPtr drv, int flags)
 	ScrnInfoPtr pScrn;
 	GDevPtr *devSections;
 
-	ERROR_STR("MaliProbe");
-
 	if (flags & PROBE_DETECT)
 	{
 		return FALSE;
@@ -820,7 +810,7 @@ static Bool MaliProbe(DriverPtr drv, int flags)
 				pScrn->LeaveVT       = MaliHWLeaveVT;
 				pScrn->ValidMode     = MaliHWValidMode;
 
-				INFO_MSG("using %s\n", dev ? dev : "default device");
+				INFO_MSG("using %s", dev ? dev : "default device");
 			}
 		}
 	}
@@ -926,7 +916,7 @@ void MaliHWSetVideoModes(ScrnInfoPtr pScrn)
 	for (modename = pScrn->display->modes; *modename != NULL; modename++)
 	{
 		for (mode = pScrn->monitor->Modes; mode != NULL; mode = mode->next)
-			if (0 == strcmp(mode->name, *modename))
+			if (0 == strncmp(mode->name, *modename, strlen(mode->name) + 1))
 			{
 				break;
 			}
@@ -1026,7 +1016,7 @@ static Bool mali_drm_open_master(ScrnInfoPtr pScrn)
 	}
 
 	fPtr->drm_fd = global_drm_fd;
-	ERROR_MSG("%s DRM OPEN (fd: 0x%x)\n", __func__, fPtr->drm_fd);
+	INFO_MSG("%s DRM OPEN (fd: 0x%x)", __func__, fPtr->drm_fd);
 
 	sv.drm_di_major = 1;
 	sv.drm_di_minor = 1;
@@ -1136,7 +1126,7 @@ static Bool MaliPreInit(ScrnInfoPtr pScrn, int flags)
 	pScrn->chipset   = "mali";
 	pScrn->videoRam  = MaliHWGetVidmem(pScrn);
 
-	INFO_MSG("hardware: %s (video memory: %dkB)\n", MaliHWGetName(pScrn), pScrn->videoRam / 1024);
+	INFO_MSG("hardware: %s (video memory: %dkB)", MaliHWGetName(pScrn), pScrn->videoRam / 1024);
 
 	/* handle options */
 	xf86CollectOptions(pScrn, NULL);
@@ -1245,14 +1235,12 @@ static Bool MaliScreenInit(SCREEN_INIT_ARGS_DECL)
 	IGNORE(argc);
 	IGNORE(argv);
 
-#if DEBUG
-	ERROR_MSG("\tbitsPerPixel=%d, depth=%d, defaultVisual=%s\n\tmask: %x,%x,%x, offset: %d,%d,%d\n",
+	INFO_MSG("bitsPerPixel=%d, depth=%d, defaultVisual=%s, mask: 0x%08x,0x%08x,0x%08x, offset: %d,%d,%d",
 	          pScrn->bitsPerPixel,
 	          pScrn->depth,
 	          xf86GetVisualName(pScrn->defaultVisual),
-	          pScrn->mask.red, pScrn->mask.green, pScrn->mask.blue,
-	          pScrn->offset.red, pScrn->offset.green, pScrn->offset.blue);
-#endif
+	          (unsigned int)pScrn->mask.red, (unsigned int)pScrn->mask.green, (unsigned int)pScrn->mask.blue,
+	          (unsigned int)pScrn->offset.red, (unsigned int)pScrn->offset.green, (unsigned int)pScrn->offset.blue);
 
 	if (fPtr->dri_render == DRI_NONE)
 	{
