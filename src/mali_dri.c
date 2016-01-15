@@ -392,7 +392,9 @@ static void platform_wait_for_vsync(ScrnInfoPtr pScrn, int fb_lcd_fd)
 		WARNING_MSG("failed in S3CFB_SET_VSYNC_INT");
 	}
 
-	if (ioctl(fb_lcd_fd, FBIO_WAITFORVSYNC, 0) < 0)
+	int crtc = 0;
+
+	if (ioctl(fb_lcd_fd, FBIO_WAITFORVSYNC, &crtc) < 0)
 	{
 		WARNING_MSG("failed in FBIO_WAITFORVSYNC");
 	}
