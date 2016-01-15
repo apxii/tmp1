@@ -177,13 +177,14 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 
 		/* get the secure ID for the framebuffers */
 		if (ioctl(fPtr->fb_lcd_fd, GET_UMP_SECURE_ID_BUF(current_buf), &ump_id) < 0
-				|| UMP_INVALID_SECURE_ID == ump_id)
+		        || UMP_INVALID_SECURE_ID == ump_id)
 		{
 			free(mem_info);
 			privPixmap->mem_info = NULL;
 			ERROR_MSG("UMP failed to retrieve secure id, current_buf: %d", current_buf);
 			return FALSE;
 		}
+
 		INFO_MSG("GET_UMP_SECURE_ID_BUF(%d) returned 0x%x", current_buf, ump_id);
 
 		mem_info->handle = ump_handle_create_from_secure_id(ump_id);
@@ -221,6 +222,7 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 			PrivPixmap *current_privPixmap = privPixmap;
 			int i;
 			PrivBuffer *buf_info = calloc(1, sizeof(*buf_info));
+
 			if (NULL == buf_info)
 			{
 				ERROR_MSG("Failed to allocate buf_info memory");
@@ -233,6 +235,7 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 			buf_info->num_pixmaps = fPtr->dri2_num_buffers;
 			buf_info->pPixmaps[0] = pPixmap;
 			current_privPixmap->buf_info = buf_info;
+
 			for (i = 1; i < buf_info->num_pixmaps; i++)
 			{
 				current_buf++;
@@ -241,6 +244,7 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 				current_privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(buf_info->pPixmaps[i]);
 				current_privPixmap->buf_info = buf_info;
 			}
+
 			current_buf = 0;
 		}
 
