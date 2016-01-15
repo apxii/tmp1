@@ -53,6 +53,7 @@ typedef struct
 	Bool use_cached_ump;
 	Bool use_umplock;
 	int fd_umplock;
+	int dri2_num_buffers;
 } MaliRec, *MaliPtr;
 
 typedef struct

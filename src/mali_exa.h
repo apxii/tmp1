@@ -40,12 +40,19 @@ typedef struct
 
 typedef struct
 {
+	PixmapPtr pPixmaps[NUM_BUFFERS];
+	int num_pixmaps;
+	int current_pixmap;
+} PrivBuffer;
+
+typedef struct
+{
 	Bool isFrameBuffer;
 	int refs;
 	int bits_per_pixel;
 	unsigned long addr;
 	mali_mem_info *mem_info;
-	PixmapPtr other_buffer;
+	PrivBuffer *buf_info;
 } PrivPixmap;
 
 extern Bool maliSetupExa(ScreenPtr pScreen, ExaDriverPtr exa);

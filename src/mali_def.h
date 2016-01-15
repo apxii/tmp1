@@ -72,8 +72,10 @@
 #define DEBUG_STR(nr,fmt,...)
 #endif
 
-#define GET_UMP_SECURE_ID_BUF1   _IOWR('m', 311, unsigned int)
-#define GET_UMP_SECURE_ID_BUF2   _IOWR('m', 312, unsigned int)
+/* This macro must be the same as defined in egl_platform_x11.c */
+#define NUM_BUFFERS 2
+
+#define GET_UMP_SECURE_ID_BUF(x) _IOWR('m', 311 + (x), unsigned int)
 
 #define FBIO_WAITFORVSYNC        _IOW('F', 0x20, __u32)
 #define S3CFB_SET_VSYNC_INT      _IOW('F', 206, unsigned int)

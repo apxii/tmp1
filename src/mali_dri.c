@@ -50,7 +50,17 @@ typedef struct
 	PixmapPtr pPixmap;
 	Bool isPageFlipped;
 	Bool has_bb_reference;
+	int previous_canflip;
+	unsigned short previous_width;
+	unsigned short previous_height;
+	unsigned long previous_serial_number;
 } MaliDRI2BufferPrivateRec, *MaliDRI2BufferPrivatePtr;
+
+static unsigned long
+MaliDRI2DrawableSerial(DrawablePtr pDraw)
+{
+	return  pDraw->serialNumber;
+}
 
 static DRI2Buffer2Ptr MaliDRI2CreateBuffer(DrawablePtr pDraw, unsigned int attachment, unsigned int format)
 {
@@ -93,6 +103,10 @@ static DRI2Buffer2Ptr MaliDRI2CreateBuffer(DrawablePtr pDraw, unsigned int attac
 	privates->pPixmap = NULL;
 	privates->isPageFlipped = FALSE;
 	privates->has_bb_reference = FALSE;
+	privates->previous_canflip = DRI2CanFlip(pDraw);
+	privates->previous_width = pDraw->width;
+	privates->previous_height = pDraw->height;
+	privates->previous_serial_number = MaliDRI2DrawableSerial(pDraw);
 
 	/* initialize buffer info to default values */
 	buffer->attachment = attachment;
@@ -102,16 +116,17 @@ static DRI2Buffer2Ptr MaliDRI2CreateBuffer(DrawablePtr pDraw, unsigned int attac
 
 	if (DRI2CanFlip(pDraw) && fPtr->use_pageflipping && DRAWABLE_WINDOW == pDraw->type)
 	{
-		assert(privWindowPixmap->other_buffer != NULL);
+		assert(privWindowPixmap->buf_info);
+		int frontLeft = privWindowPixmap->buf_info->current_pixmap;
+		int backLeft = (frontLeft + 1) % privWindowPixmap->buf_info->num_pixmaps;
 
 		if (DRI2BufferFrontLeft == attachment || DRI2BufferFakeFrontLeft == attachment)
 		{
-			pPixmapToWrap = pWindowPixmap;
+			pPixmapToWrap = privWindowPixmap->buf_info->pPixmaps[frontLeft];
 		}
 		else if (DRI2BufferBackLeft == attachment)
 		{
-			PixmapPtr tempPixmap = privWindowPixmap->other_buffer;
-			pPixmapToWrap = tempPixmap;
+			pPixmapToWrap = privWindowPixmap->buf_info->pPixmaps[backLeft];
 		}
 
 		privates->isPageFlipped = TRUE;
@@ -130,26 +145,51 @@ static DRI2Buffer2Ptr MaliDRI2CreateBuffer(DrawablePtr pDraw, unsigned int attac
 			{
 				pPixmapToWrap = pScreen->GetWindowPixmap((WindowPtr) pDraw);
 			}
-
 			privPixmapToWrap = (PrivPixmap *)exaGetPixmapDriverPrivate(pPixmapToWrap);
 		}
 		else
 		{
-			/* Create a new pixmap for the offscreen data */
-			pPixmapToWrap = (*pScreen->CreatePixmap)(pScreen, pDraw->width, pDraw->height, (format != 0) ? format : pDraw->depth, 0);
-
-			if (NULL == pPixmapToWrap)
+			int i, backLeft;
+			PrivPixmap *tmpPrivPixmap;
+			/* Create new pixmaps for the offscreen data */
+			PrivBuffer *buf_info = calloc(1, sizeof(*buf_info));
+			if (NULL == buf_info)
 			{
-				ERROR_MSG("[%s:%d] unable to allocate pixmap\n", __FUNCTION__, __LINE__);
+				ERROR_MSG("[%s:%d] unable to allocate buf_info\n", __FUNCTION__, __LINE__);
 				free(buffer);
 				free(privates);
 				return NULL;
 			}
+			buf_info->current_pixmap = 0;
+			/* Create fPtr->dri2_num_buffers - 1 back pixmaps, so we have total fPtr->dri2_num_buffers pixmaps
+			 * include the front one, But if SwapBuffer is called to do copy, then we have to create another
+			 * back pixmap to match the total fPtr->dri2_num_buffers pixmaps */
+			for (i = 0; i < fPtr->dri2_num_buffers - 1; i++)
+			{
+				buf_info->pPixmaps[i] = (*pScreen->CreatePixmap)(pScreen, pDraw->width, pDraw->height, (format != 0) ? format : pDraw->depth, 0);
+				if (!buf_info->pPixmaps[i])
+				{
+					ERROR_MSG("[%s:%d] unable to allocate %d th PixmapPtr, total: %d needed\n", __FUNCTION__, __LINE__, i, fPtr->dri2_num_buffers);
+					break;
+				}
+				tmpPrivPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(buf_info->pPixmaps[i]);
+				tmpPrivPixmap->buf_info = buf_info;
 
+			}
+			if (i == 0)
+			{
+				ERROR_MSG("[%s:%d] unable to allocate any PixmapPtr\n", __FUNCTION__, __LINE__);
+				free(buffer);
+				free(privates);
+				free(buf_info);
+				return NULL;
+			}
+			buf_info->num_pixmaps = i;
+			backLeft = (buf_info->current_pixmap + 1) % buf_info->num_pixmaps;
+			pPixmapToWrap = buf_info->pPixmaps[backLeft];
 			/* This is the only case where we don't need to add an additional reference to the pixmap, so
 			 * drop one here to negate the increase at the end of the function */
 			pPixmapToWrap->refcnt--;
-
 			exaMoveInPixmap(pPixmapToWrap);
 		}
 	}
@@ -159,13 +199,22 @@ static DRI2Buffer2Ptr MaliDRI2CreateBuffer(DrawablePtr pDraw, unsigned int attac
 
 	buffer->cpp = pPixmapToWrap->drawable.bitsPerPixel / 8;
 	buffer->name = ump_secure_id_get(privPixmapToWrap->mem_info->handle);
-	buffer->flags = privPixmapToWrap->mem_info->offset;
 	buffer->pitch = pPixmapToWrap->devKind;
-
 	if (0 == buffer->pitch)
 	{
 		WARNING_MSG("Autocalculating pitch");
 		buffer->pitch = ((pPixmapToWrap->drawable.width * pPixmapToWrap->drawable.bitsPerPixel) + 7) / 8;
+	}
+
+	if (privPixmapToWrap->isFrameBuffer)
+	{
+		assert((privPixmapToWrap->mem_info->offset & 3) == 0);
+		buffer->flags = privPixmapToWrap->mem_info->offset;
+	}
+	else if (attachment == DRI2BufferBackLeft)
+	{
+		assert(privPixmapToWrap->mem_info->offset == 0);
+		buffer->flags = 1;
 	}
 
 	pPixmapToWrap->refcnt++;
@@ -177,16 +226,32 @@ static void MaliDRI2DestroyBuffer(DrawablePtr pDraw, DRI2Buffer2Ptr buffer)
 {
 	ScreenPtr pScreen = pDraw->pScreen;
 	ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
+	MaliPtr fPtr = MALIPTR(pScrn);
 
 	DEBUG_STR(1, "Destroying attachment %d for drawable %p", buffer->attachment, pDraw);
 
 	if (NULL != buffer)
 	{
 		MaliDRI2BufferPrivatePtr private = buffer->driverPrivate;
+		PrivPixmap *privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(private->pPixmap);
 
-		if (NULL != private && NULL != private->pPixmap)
+		if (!privPixmap->isFrameBuffer)
 		{
-			(*pScreen->DestroyPixmap)(private->pPixmap);
+			int i;
+			PrivBuffer *buf_info = privPixmap->buf_info;
+			assert(private->pPixmap->refcnt);
+			if (buf_info && private->pPixmap->refcnt == 1)
+			{
+				for (i = 0; i < fPtr->dri2_num_buffers && buf_info->pPixmaps[i]; i++)
+				{
+					(*pScreen->DestroyPixmap)(buf_info->pPixmaps[i]);
+				}
+				free(buf_info);
+			}
+			else
+			{
+				(*pScreen->DestroyPixmap)(private->pPixmap);
+			}
 		}
 
 		free(private);
@@ -214,107 +279,65 @@ static int wt_set_window_pixmap(WindowPtr win, pointer data)
 	}
 }
 
-DrawablePtr dri2_get_drawable(DrawablePtr pDraw, DRI2BufferPtr buffer)
+static void exchange_buffers(DrawablePtr pDraw, DRI2BufferPtr front, DRI2BufferPtr back, int dri2_complete_cmd)
 {
-	DrawablePtr drawable = NULL;
+	ScreenPtr pScreen = pDraw->pScreen;
+	ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
+	MaliPtr fPtr = MALIPTR(pScrn);
+	MaliDRI2BufferPrivatePtr front_priv = front->driverPrivate;
+	MaliDRI2BufferPrivatePtr back_priv  = back->driverPrivate;
+	PixmapPtr front_pixmap = front_priv->pPixmap;
+	PixmapPtr back_pixmap  = back_priv->pPixmap;
+	PrivPixmap *front_pixmap_priv = (PrivPixmap *)exaGetPixmapDriverPrivate(front_pixmap);
+	PrivPixmap *back_pixmap_priv  = (PrivPixmap *)exaGetPixmapDriverPrivate(back_pixmap);
+	int nextBack;
+	PrivPixmap *nextPrivPixmap;
 
-	if (DRI2BufferFrontLeft == buffer->attachment)
-	{
-		drawable = pDraw;
-	}
-	else
-	{
-		MaliDRI2BufferPrivatePtr private = buffer->driverPrivate;
-		drawable = &private->pPixmap->drawable;
-	}
+	assert(back_pixmap_priv->buf_info);
+	back_pixmap_priv->buf_info->current_pixmap =  (back_pixmap_priv->buf_info->current_pixmap + 1) %  back_pixmap_priv->buf_info->num_pixmaps;
+	nextBack = (back_pixmap_priv->buf_info->current_pixmap + 1) % back_pixmap_priv->buf_info->num_pixmaps;
+	nextPrivPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(back_pixmap_priv->buf_info->pPixmaps[nextBack]);
 
-	return drawable;
+	if (dri2_complete_cmd == DRI2_FLIP_COMPLETE)
+	{
+		assert(front_pixmap_priv->buf_info == back_pixmap_priv->buf_info);
+		exchange(front->name, back->name);
+		front_priv->pPixmap = back_priv->pPixmap;
+	}
+	else if (dri2_complete_cmd == DRI2_EXCHANGE_COMPLETE)
+	{
+		exchange(front->name, back->name);
+		exchange(front_pixmap_priv->mem_info, back_pixmap_priv->mem_info);
+	}
+	back->name = ump_secure_id_get(nextPrivPixmap->mem_info->handle);
+	back_priv->pPixmap = back_pixmap_priv->buf_info->pPixmaps[nextBack];
 }
 
-PixmapPtr dri2_get_drawable_pixmap(DrawablePtr pDraw)
+static Bool MaliDRI2CanExchange(DrawablePtr pDraw, DRI2BufferPtr front, DRI2BufferPtr back)
 {
-	PixmapPtr pix = NULL;
+	MaliDRI2BufferPrivatePtr front_priv = front->driverPrivate;
+	MaliDRI2BufferPrivatePtr back_priv  = back->driverPrivate;
+	PixmapPtr front_pixmap = front_priv->pPixmap;
+	PixmapPtr back_pixmap  = back_priv->pPixmap;
+	PrivPixmap *front_pixmap_priv = (PrivPixmap *)exaGetPixmapDriverPrivate(front_pixmap);
+	PrivPixmap *back_pixmap_priv  = (PrivPixmap *)exaGetPixmapDriverPrivate(back_pixmap);
 
-	if (!pDraw)
+	Bool can_exchange = TRUE;
+	if (!(front_pixmap->drawable.width == back_pixmap->drawable.width &&
+		front_pixmap->drawable.height == back_pixmap->drawable.height &&
+		front_pixmap->drawable.bitsPerPixel == back_pixmap->drawable.bitsPerPixel))
 	{
-		return NULL;
+		can_exchange = FALSE;
 	}
-
-	if (DRAWABLE_WINDOW == pDraw->type)
+	if (front_pixmap_priv->isFrameBuffer != back_pixmap_priv->isFrameBuffer)
 	{
-		pix = pDraw->pScreen->GetWindowPixmap((WindowPtr)pDraw);
+		can_exchange = FALSE;
 	}
-	else
+	if (front_pixmap_priv->mem_info->usize != back_pixmap_priv->mem_info->usize)
 	{
-		pix = (PixmapPtr)pDraw;
+		can_exchange = FALSE;
 	}
-
-	return pix;
-}
-
-static int exchange_buffers(DrawablePtr pDraw, DRI2BufferPtr front, DRI2BufferPtr back, int dri2_complete_cmd)
-{
-	DrawablePtr front_drawable;
-	DrawablePtr back_drawable;
-	PixmapPtr front_pixmap;
-	PixmapPtr back_pixmap;
-	PrivPixmap *front_privPixmap = NULL;
-	PrivPixmap *back_privPixmap = NULL;
-	Bool exchange_mem_info = FALSE;
-	Bool both_framebuffer = FALSE;
-	Bool one_framebuffer = FALSE;
-
-	front_drawable = dri2_get_drawable(pDraw, front);
-	back_drawable = dri2_get_drawable(pDraw, back);
-
-	front_pixmap = dri2_get_drawable_pixmap(front_drawable);
-	back_pixmap = dri2_get_drawable_pixmap(back_drawable);
-
-	front_privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(front_pixmap);
-	back_privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(back_pixmap);
-
-	exchange(front->name, back->name);
-
-	/* exchange the private memory info if
-	 * 1. it is a swap between non-framebuffers
-	 * exchange the driverPrivate info if
-	 * 1. it is a flip between the framebuffers
-	 */
-	both_framebuffer = (front_privPixmap->isFrameBuffer && back_privPixmap->isFrameBuffer);
-	one_framebuffer = (front_privPixmap->isFrameBuffer || back_privPixmap->isFrameBuffer);
-
-	if (both_framebuffer)
-	{
-		exchange_mem_info = FALSE;
-	}
-	else if (!one_framebuffer && dri2_complete_cmd == DRI2_EXCHANGE_COMPLETE)
-	{
-		exchange_mem_info = TRUE;
-	}
-
-	if (exchange_mem_info)
-	{
-		if (front_privPixmap->mem_info->usize == back_privPixmap->mem_info->usize)
-		{
-			DEBUG_STR(1, "EXCHANGING UMP ID 0x%x with 0x%x (%s)", ump_secure_id_get(front_privPixmap->mem_info->handle), ump_secure_id_get(back_privPixmap->mem_info->handle), dri2_complete_cmd == DRI2_EXCHANGE_COMPLETE ? "SWAP" : "FLIP");
-			exchange(front_privPixmap->mem_info, back_privPixmap->mem_info);
-		}
-		else
-		{
-			DEBUG_STR(1, "EXCHANGING FAILED FOR UMP ID 0x%x size: %ld with 0x%x size (%ld)", ump_secure_id_get(front_privPixmap->mem_info->handle), front_privPixmap->mem_info->usize, ump_secure_id_get(back_privPixmap->mem_info->handle), back_privPixmap->mem_info->usize);
-			return 0;
-		}
-	}
-	else if (both_framebuffer)
-	{
-		exchange(front->driverPrivate, back->driverPrivate);
-	}
-	else
-	{
-		return 0;
-	}
-
-	return 1;
+	return can_exchange;
 }
 
 static void platform_wait_for_vsync(ScrnInfoPtr pScrn, int fb_lcd_fd)
@@ -388,8 +411,8 @@ static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferP
 	MaliPtr fPtr = MALIPTR(pScrn);
 	BoxRec box;
 	RegionRec region;
-	void *tmp;
 	int dri2_complete_cmd = DRI2_BLIT_COMPLETE;
+	int new_canflip = 0;
 
 	MaliDRI2BufferPrivatePtr front_priv = front->driverPrivate;
 	MaliDRI2BufferPrivatePtr back_priv  = back->driverPrivate;
@@ -402,9 +425,37 @@ static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferP
 	PrivPixmap *front_pixmap_priv = (PrivPixmap *)exaGetPixmapDriverPrivate(front_pixmap);
 	PrivPixmap *back_pixmap_priv  = (PrivPixmap *)exaGetPixmapDriverPrivate(back_pixmap);
 
-	if (DRI2CanFlip(pDraw) && fPtr->use_pageflipping && DRAWABLE_WINDOW == pDraw->type && front_priv->isPageFlipped)
-	{
+	back->flags &= ~3;
 
+	new_canflip = DRI2CanFlip(pDraw);
+
+	if ((back_priv->previous_canflip != new_canflip)
+	        || (back_priv->previous_width != pDraw->width)
+	        || (back_priv->previous_height != pDraw->height)
+	        || (back_priv->previous_serial_number != MaliDRI2DrawableSerial(pDraw)))
+	{
+		back_pixmap->drawable.serialNumber = NEXT_SERIAL_NUMBER;
+		back_priv->previous_width = pDraw->width;
+		back_priv->previous_height = pDraw->height;
+		back_priv->previous_serial_number = MaliDRI2DrawableSerial(pDraw);
+	}
+
+	if ((front_priv->previous_canflip != new_canflip)
+	        || (front_priv->previous_width != pDraw->width)
+	        || (front_priv->previous_height != pDraw->height)
+	        || (front_priv->previous_serial_number != MaliDRI2DrawableSerial(pDraw)))
+	{
+		front_pixmap->drawable.serialNumber = NEXT_SERIAL_NUMBER;
+		front_priv->previous_width = pDraw->width;
+		front_priv->previous_height = pDraw->height;
+		front_priv->previous_serial_number = MaliDRI2DrawableSerial(pDraw);
+	}
+
+	back_priv->previous_canflip = new_canflip;
+	front_priv->previous_canflip = new_canflip;
+
+	if (new_canflip && fPtr->use_pageflipping && DRAWABLE_WINDOW == pDraw->type && front_priv->isPageFlipped)
+	{
 		unsigned int line_length = fPtr->fb_lcd_var.xres * fPtr->fb_lcd_var.bits_per_pixel / 8;
 		fPtr->fb_lcd_var.yoffset = back_pixmap_priv->mem_info->offset / line_length;
 		DEBUG_STR(1, "Flipping! ofs %d", fPtr->fb_lcd_var.yoffset);
@@ -430,49 +481,28 @@ static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferP
 #else
 		pScreen->SourceValidate(pDraw, 0, 0, pDraw->width, pDraw->height, IncludeInferiors);
 #endif
-
-		pScreen->SetScreenPixmap(back_pixmap);
-
-		/* Update all windows so that their front buffer is now the other half of the fbdev */
-		WalkTree(pScreen, wt_set_window_pixmap, back_pixmap);
-
-
+		/* Update all windows so that their front buffer is now the next one */
+		WalkTree(pScreen, wt_set_window_pixmap, front_priv->pPixmap);
 	}
-	else if (front_pixmap->drawable.width        == back_pixmap->drawable.width   &&
-	         front_pixmap->drawable.height       == back_pixmap->drawable.height  &&
-	         front_pixmap->drawable.bitsPerPixel == back_pixmap->drawable.bitsPerPixel)
+	else if (MaliDRI2CanExchange(pDraw, front, back))
 	{
-		PixmapPtr dst_pix = dri2_get_drawable_pixmap(dri2_get_drawable(pDraw, front));
-
+		if (back_pixmap_priv->buf_info->num_pixmaps == fPtr->dri2_num_buffers)
+		{
+			back_pixmap_priv->buf_info->num_pixmaps = fPtr->dri2_num_buffers - 1;
+		}
 		dri2_complete_cmd = DRI2_EXCHANGE_COMPLETE;
+		exchange_buffers(pDraw, front, back, dri2_complete_cmd);
 
-		if (exchange_buffers(pDraw, front, back, dri2_complete_cmd))
-		{
-			DEBUG_STR(1, "Swapping! front_pixmap->drawable.width %d, front_pixmap->drawable.height %d, pDraw->width %d, pDraw->height %d", front_pixmap->drawable.width, front_pixmap->drawable.height, pDraw->width, pDraw->height);
-			box.x1 = 0;
-			box.y1 = 0;
-			box.x2 = pDraw->width;
-			box.y2 = pDraw->height;
-			REGION_INIT(pScreen, &region, &box, 0);
+		DEBUG_STR(1, "Swapping! front_pixmap->drawable.width %d, front_pixmap->drawable.height %d, pDraw->width %d, pDraw->height %d", front_pixmap->drawable.width, front_pixmap->drawable.height, pDraw->width, pDraw->height);
+		box.x1 = 0;
+		box.y1 = 0;
+		box.x2 = pDraw->width;
+		box.y2 = pDraw->height;
+		REGION_INIT(pScreen, &region, &box, 0);
 
-			RegionTranslate(&region, dst_pix->screen_x, dst_pix->screen_y);
+		RegionTranslate(&region, front_pixmap->screen_x, front_pixmap->screen_y);
 
-			DamageDamageRegion(pDraw, &region);
-
-			front_pixmap->drawable.serialNumber = NEXT_SERIAL_NUMBER ;
-			back_pixmap->drawable.serialNumber = NEXT_SERIAL_NUMBER ;
-		}
-		else
-		{
-			box.x1 = 0;
-			box.y1 = 0;
-			box.x2 = pDraw->width;
-			box.y2 = pDraw->height;
-			REGION_INIT(pScreen, &region, &box, 0);
-
-			MaliDRI2CopyRegion(pDraw, &region, front, back);
-			dri2_complete_cmd = DRI2_BLIT_COMPLETE;
-		}
+		DamageDamageRegion(pDraw, &region);
 	}
 	else
 	{
@@ -482,8 +512,34 @@ static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferP
 		box.y2 = pDraw->height;
 		REGION_INIT(pScreen, &region, &box, 0);
 
+		/* Create new pixmaps if we are doing copy, so that there are total fPtr->dri2_num_buffers back pixmaps */
+		if (back_pixmap_priv->buf_info->num_pixmaps < fPtr->dri2_num_buffers)
+		{
+			if (back_pixmap_priv->buf_info->pPixmaps[fPtr->dri2_num_buffers - 1])
+			{
+				back_pixmap_priv->buf_info->num_pixmaps = fPtr->dri2_num_buffers;
+			}
+			else
+			{
+				int i;
+				PrivPixmap *tmpPrivPixmap;
+				DrawablePtr drawable = &back_pixmap_priv->buf_info->pPixmaps[0]->drawable;
+				for (i = back_pixmap_priv->buf_info->num_pixmaps; i < fPtr->dri2_num_buffers; i++)
+				{
+					back_pixmap_priv->buf_info->pPixmaps[i] = (*pScreen->CreatePixmap)(pScreen, drawable->width, drawable->height, drawable->depth, 0);
+					if (!back_pixmap_priv->buf_info->pPixmaps[i])
+					{
+						break;
+					}
+					tmpPrivPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(back_pixmap_priv->buf_info->pPixmaps[i]);
+					tmpPrivPixmap->buf_info = back_pixmap_priv->buf_info;
+				}
+				back_pixmap_priv->buf_info->num_pixmaps = i;
+			}
+		}
 		MaliDRI2CopyRegion(pDraw, &region, front, back);
 		dri2_complete_cmd = DRI2_BLIT_COMPLETE;
+		exchange_buffers(pDraw, front, back, dri2_complete_cmd);
 	}
 
 	DRI2SwapComplete(client, pDraw, 0, 0, 0, dri2_complete_cmd, func, data);

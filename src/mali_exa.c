@@ -113,7 +113,8 @@ static void *maliCreatePixmap(ScreenPtr pScreen, int size, int align)
 
 	privPixmap->isFrameBuffer  = FALSE;
 	privPixmap->bits_per_pixel = 0;
-	privPixmap->other_buffer   = NULL;
+	privPixmap->mem_info = NULL;
+	privPixmap->buf_info = NULL;
 
 	return privPixmap;
 }
@@ -126,17 +127,15 @@ static void maliDestroyPixmap(ScreenPtr pScreen, void *driverPriv)
 
 	if (NULL != privPixmap->mem_info)
 	{
-		/* Need to destroy the other buffer if it's present. At the moment this never gets called for a
-		 * framebuffer pixmap so asserting here for now because it will break if it is called with a framebuffer
-		 * pixmap */
-		assert(privPixmap->other_buffer == NULL);
+		/* frame buffer pixmap should not be called here */
+		assert(!privPixmap->isFrameBuffer);
 		ump_reference_release(privPixmap->mem_info->handle);
 		free(privPixmap->mem_info);
 		free(privPixmap);
 	}
 }
 
-static unsigned int offset = 0;
+static unsigned int current_buf = 0;
 
 static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int depth, int bitsPerPixel, int devKind, pointer pPixData)
 {
@@ -154,13 +153,12 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 
 	miModifyPixmapHeader(pPixmap, width, height, depth, bitsPerPixel, devKind, pPixData);
 
-	if ((pPixData == fPtr->fbmem) || offset)
+	if ((pPixData == fPtr->fbmem) || current_buf)
 	{
 		/* Wrap one of the fbdev virtual buffers */
 		ump_secure_id ump_id = UMP_INVALID_SECURE_ID;
 
 		privPixmap->isFrameBuffer = TRUE;
-
 		mem_info = privPixmap->mem_info;
 
 		if (mem_info)
@@ -178,24 +176,15 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 		}
 
 		/* get the secure ID for the framebuffers */
-		if (!offset)
-		{
-			(void)ioctl(fPtr->fb_lcd_fd, GET_UMP_SECURE_ID_BUF1, &ump_id);
-			INFO_MSG("GET_UMP_SECURE_ID_BUF1 returned 0x%x offset: %i virt address: %p fb_virt: %p", ump_id, offset, pPixData, fPtr->fbmem);
-		}
-		else
-		{
-			(void)ioctl(fPtr->fb_lcd_fd, GET_UMP_SECURE_ID_BUF2, &ump_id);
-			INFO_MSG("GET_UMP_SECURE_ID_BUF2 returned 0x%x offset: %i virt address: %p fb_virt: %p", ump_id, offset, pPixData, fPtr->fbmem);
-		}
-
-		if (UMP_INVALID_SECURE_ID == ump_id)
+		if (ioctl(fPtr->fb_lcd_fd, GET_UMP_SECURE_ID_BUF(current_buf), &ump_id) < 0
+				|| UMP_INVALID_SECURE_ID == ump_id)
 		{
 			free(mem_info);
 			privPixmap->mem_info = NULL;
-			ERROR_MSG("UMP failed to retrieve secure id");
+			ERROR_MSG("UMP failed to retrieve secure id, current_buf: %d", current_buf);
 			return FALSE;
 		}
+		INFO_MSG("GET_UMP_SECURE_ID_BUF(%d) returned 0x%x", current_buf, ump_id);
 
 		mem_info->handle = ump_handle_create_from_secure_id(ump_id);
 
@@ -217,32 +206,42 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 			privPixmap->bits_per_pixel = bitsPerPixel;
 		}
 
-		/* When this is called directly from X to create the front buffer, offset is zero as expected. When this
-		 * function is called recursively to create the back buffer, offset is the offset within the fbdev to
-		 * the second buffer */
-		privPixmap->mem_info->offset = offset;
+		/* When this is called directly from X to create the front buffer, current_buf is zero as expected. When this
+		 * function is called recursively to create the back buffers, current_buf is increased to the next buffer */
+		privPixmap->mem_info->offset = current_buf * size;
 
-		/* Only wrap the other half if there is another half! */
 		if (pPixData == fPtr->fbmem)
 		{
-			/* This is executed only when this function is called directly from X. We need to create the
-			 * back buffer now because we can't "wrap" existing memory in a pixmap during DRI2CreateBuffer
+			/* This is executed only when this function is called directly from X. We need to create the other
+			 * back buffers now because we can't "wrap" existing memory in a pixmap during DRI2CreateBuffer
 			 * for the back buffer of the framebuffer. In DRI2CreateBuffer instead of allocating a new
-			 * pixmap for the back buffer like we do for non-swappable windows, we'll just grab this pointer
-			 * from the screen pixmap and return it. */
+			 * pixmap for the back buffer like we do for non-swappable windows, we'll just use the 'current_pixmap'
+			 * to grab this pointer from the screen pixmap and return it. */
 
-			PrivPixmap *other_privPixmap;
+			PrivPixmap *current_privPixmap = privPixmap;
+			int i;
+			PrivBuffer *buf_info = calloc(1, sizeof(*buf_info));
+			if (NULL == buf_info)
+			{
+				ERROR_MSG("Failed to allocate buf_info memory");
+				free(mem_info);
+				privPixmap->mem_info = NULL;
+				return FALSE;
+			}
 
-			offset = size;
-			privPixmap->other_buffer = (*pScreen->CreatePixmap)(pScreen, width, height, depth, 0);
-
-			/* Store a pointer to this pixmap in the one we just created. Both fbdev pixmaps are then
-			 * accessible from the screen pixmap, whichever of the fbdev pixmaps happens to be the screen
-			 * pixmap at the time */
-			other_privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(privPixmap->other_buffer);
-			other_privPixmap->other_buffer = pPixmap;
-
-			offset = 0;
+			buf_info->current_pixmap = 0;
+			buf_info->num_pixmaps = fPtr->dri2_num_buffers;
+			buf_info->pPixmaps[0] = pPixmap;
+			current_privPixmap->buf_info = buf_info;
+			for (i = 1; i < buf_info->num_pixmaps; i++)
+			{
+				current_buf++;
+				buf_info->pPixmaps[i] = (*pScreen->CreatePixmap)(pScreen, width, height, depth, 0);
+				assert(buf_info->pPixmaps[i]);
+				current_privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(buf_info->pPixmaps[i]);
+				current_privPixmap->buf_info = buf_info;
+			}
+			current_buf = 0;
 		}
 
 		INFO_MSG("Creating FRAMEBUFFER pixmap %p at offset %lu, privPixmap=%p", pPixmap, privPixmap->mem_info->offset, privPixmap);

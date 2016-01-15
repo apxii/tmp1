@@ -274,7 +274,9 @@ static Bool fbdev_crtc_config_resize(ScrnInfoPtr pScrn, int width, int height)
 	/* update pitch setting in EXA */
 #if 1
 	PixmapPtr frontPixmap = (*pScrn->pScreen->GetScreenPixmap)(pScrn->pScreen);
-	PixmapPtr backPixmap  = ((PrivPixmap *)exaGetPixmapDriverPrivate(frontPixmap))->other_buffer;
+	PrivPixmap *privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(frontPixmap);
+	int backLeft = (privPixmap->buf_info->current_pixmap + 1) % privPixmap->buf_info->num_pixmaps;
+	PixmapPtr backPixmap  = privPixmap->buf_info->pPixmaps[backLeft];
 
 	backPixmap->devKind = frontPixmap->devKind = pitch;
 	backPixmap->drawable.width = frontPixmap->drawable.width = width;
@@ -1164,6 +1166,17 @@ static Bool MaliPreInit(ScrnInfoPtr pScrn, int flags)
 		return FALSE;
 	}
 
+	if (NUM_BUFFERS > fPtr->fb_lcd_var.yres_virtual / fPtr->fb_lcd_var.yres)
+	{
+		ERROR_MSG("Defined %d buffers, but kernel only reserves %d buffers", NUM_BUFFERS, fPtr->fb_lcd_var.yres_virtual / fPtr->fb_lcd_var.yres);
+		fPtr->dri2_num_buffers = fPtr->fb_lcd_var.yres_virtual / fPtr->fb_lcd_var.yres;
+	}
+	else
+	{
+		fPtr->dri2_num_buffers = NUM_BUFFERS;
+		INFO_MSG("Use %d buffers", fPtr->dri2_num_buffers);
+	}
+
 	pScrn->frameX0 = 0;
 	pScrn->frameY0 = 0;
 	pScrn->frameX1 = fPtr->fb_lcd_var.xres;
@@ -1236,11 +1249,11 @@ static Bool MaliScreenInit(SCREEN_INIT_ARGS_DECL)
 	IGNORE(argv);
 
 	INFO_MSG("bitsPerPixel=%d, depth=%d, defaultVisual=%s, mask: 0x%08x,0x%08x,0x%08x, offset: %d,%d,%d",
-	          pScrn->bitsPerPixel,
-	          pScrn->depth,
-	          xf86GetVisualName(pScrn->defaultVisual),
-	          (unsigned int)pScrn->mask.red, (unsigned int)pScrn->mask.green, (unsigned int)pScrn->mask.blue,
-	          (unsigned int)pScrn->offset.red, (unsigned int)pScrn->offset.green, (unsigned int)pScrn->offset.blue);
+	         pScrn->bitsPerPixel,
+	         pScrn->depth,
+	         xf86GetVisualName(pScrn->defaultVisual),
+	         (unsigned int)pScrn->mask.red, (unsigned int)pScrn->mask.green, (unsigned int)pScrn->mask.blue,
+	         (unsigned int)pScrn->offset.red, (unsigned int)pScrn->offset.green, (unsigned int)pScrn->offset.blue);
 
 	if (fPtr->dri_render == DRI_NONE)
 	{

@@ -193,7 +193,7 @@ static void fbdev_lcd_output_mode_set(xf86OutputPtr output, DisplayModePtr mode,
 	fPtr->fb_lcd_var.xres = mode->HDisplay;
 	fPtr->fb_lcd_var.yres = mode->VDisplay;
 	fPtr->fb_lcd_var.xres_virtual = mode->HDisplay;
-	fPtr->fb_lcd_var.yres_virtual = mode->VDisplay * 2;
+	fPtr->fb_lcd_var.yres_virtual = mode->VDisplay * fPtr->dri2_num_buffers;
 	INFO_MSG("Changing mode to %i %i %i %i", fPtr->fb_lcd_var.xres, fPtr->fb_lcd_var.yres, fPtr->fb_lcd_var.xres_virtual, fPtr->fb_lcd_var.yres_virtual);
 
 	if (ioctl(fPtr->fb_lcd_fd, FBIOPUT_VSCREENINFO, &fPtr->fb_lcd_var) < 0)
